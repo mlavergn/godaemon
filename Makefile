@@ -8,7 +8,10 @@
 
 .PHONY: test
 
-VERSION := 1.0.0
+VERSION := 1.0.1
+
+ver:
+	@sed -i '' 's/^const Version = "[0-9]\{1,3\}.[0-9]\{1,3\}.[0-9]\{1,3\}"/const Version = "${VERSION}"/' src/daemon/daemon.go
 
 lint:
 	golint .

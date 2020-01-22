@@ -17,6 +17,12 @@ func main() {
 	go func() {
 		fmt.Println("Hello")
 		<-time.After(10 * time.Second)
+
+		// simulate panic
+		// panicCh := make(chan bool)
+		// close(panicCh)
+		// panicCh <- true
+
 		closeCh <- true
 	}()
 

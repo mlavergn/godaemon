@@ -13,6 +13,9 @@ import (
 	"syscall"
 )
 
+// Version export
+const Version = "1.0.1"
+
 // Daemon type
 type Daemon struct {
 }
@@ -95,6 +98,70 @@ func (id *Daemon) pidClear() {
 	os.Remove(*lockFile)
 }
 
+func (id *Daemon) status() {
+	pid := id.pidRead()
+	if pid != -1 {
+		fmt.Println("Process is running or lock file exists")
+	} else {
+		fmt.Println("Process is stopped")
+	}
+}
+
+func (id *Daemon) start() {
+	pid := id.pidRead()
+	if pid != -1 {
+		fmt.Println("Already running or lock file exists")
+		os.Exit(1)
+	}
+
+	cmd := exec.Command(os.Args[0], "run")
+	cmd.Start()
+	fmt.Println("Started", cmd.Process.Pid)
+	id.pidSave(cmd.Process.Pid)
+}
+
+func (id *Daemon) stop() {
+	pid := id.pidRead()
+	if pid == -1 {
+		fmt.Println("Not running")
+		os.Exit(1)
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		fmt.Println("Unable to find", pid, err)
+		os.Exit(1)
+	}
+
+	id.pidClear()
+
+	err = process.Kill()
+	if err != nil {
+		fmt.Println("Failed to stop", pid, err)
+	} else {
+		fmt.Println("Stopped", pid)
+	}
+}
+
+func (id *Daemon) run() {
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, os.Kill, syscall.SIGTERM)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Println("Recovered from", r)
+				// respawn?
+			}
+		}()
+		<-signalCh
+		signal.Stop(signalCh)
+		fmt.Println("Exit command received. Exiting...")
+		id.pidClear()
+		os.Exit(0)
+	}()
+}
+
 // Main export
 func (id *Daemon) Main() {
 	op := "run"
@@ -105,60 +172,23 @@ func (id *Daemon) Main() {
 	switch op {
 	case "run":
 		fmt.Println("Running ...")
-		signalCh := make(chan os.Signal, 1)
-		signal.Notify(signalCh, os.Interrupt, os.Kill, syscall.SIGTERM)
-
-		go func() {
-			<-signalCh
-			signal.Stop(signalCh)
-			fmt.Println("Exit command received. Exiting...")
-			id.pidClear()
-			os.Exit(0)
-		}()
+		id.run()
 		break
 	case "start":
 		fmt.Println("Starting ...")
-		pid := id.pidRead()
-		if pid != -1 {
-			fmt.Println("Already running or lock file exists")
-			os.Exit(1)
-		}
-
-		cmd := exec.Command(os.Args[0], "run")
-		cmd.Start()
-		fmt.Println("Started", cmd.Process.Pid)
-		id.pidSave(cmd.Process.Pid)
+		id.start()
 		os.Exit(0)
 	case "stop":
 		fmt.Println("Stopping ...")
-		pid := id.pidRead()
-		if pid == -1 {
-			fmt.Println("Not running")
-			os.Exit(1)
-		}
-
-		process, err := os.FindProcess(pid)
-		if err != nil {
-			fmt.Println("Unable to find", pid, err)
-			os.Exit(1)
-		}
-
-		id.pidClear()
-
-		err = process.Kill()
-		if err != nil {
-			fmt.Println("Failed to stop", pid, err)
-		} else {
-			fmt.Println("Stopped", pid)
-		}
+		id.stop()
+		os.Exit(0)
+	case "restart":
+		fmt.Println("Restarting ...")
+		id.stop()
+		id.start()
 		os.Exit(0)
 	case "status":
-		pid := id.pidRead()
-		if pid != -1 {
-			fmt.Println("Process is running or lock file exists")
-		} else {
-			fmt.Println("Process is stopped")
-		}
+		id.status()
 		os.Exit(0)
 	}
 }
