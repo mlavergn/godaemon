@@ -1,9 +1,9 @@
 package daemon
 
 import (
-	"fmt"
 	"io/ioutil"
-	"log"
+	oslog "log"
+	"log/syslog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -14,7 +14,35 @@ import (
 )
 
 // Version export
-const Version = "1.1.0"
+const Version = "1.2.0"
+
+// standard logger
+var log *oslog.Logger
+
+// debug logger
+var dlog *oslog.Logger
+
+func init() {
+	// if we were launched by a startup process -or- our group is a system
+	isDaemon := os.Getppid() < 100 || os.Getpid()-os.Getppid() == 1
+	if isDaemon {
+		filePath, _ := os.Executable()
+		_, fileName := filepath.Split(filePath)
+		logSys, err := syslog.New(syslog.LOG_WARNING, fileName)
+		if err == nil {
+			log = oslog.New(logSys, "", 0)
+			log.Println("syslog logging enabled")
+		} else {
+			log = oslog.New(ioutil.Discard, "", 0)
+		}
+	} else {
+		log = oslog.New(os.Stdout, "", 0)
+	}
+
+	// for debugging uncomment:
+	// dlog = oslog.New(ioutil.Discard, "GoDaemon", oslog.Ltime|oslog.Lshortfile)
+	dlog = oslog.New(ioutil.Discard, "", 0)
+}
 
 // Daemon type
 type Daemon struct {
@@ -26,7 +54,7 @@ func NewDaemon() *Daemon {
 }
 
 func (id *Daemon) pidFile() *string {
-	log.Println("Daemon.pidFile")
+	dlog.Println("Daemon.pidFile")
 	execName, err := os.Executable()
 	if err != nil {
 		log.Println("Unable to obtain executable name", err)
@@ -52,12 +80,12 @@ func (id *Daemon) pidFile() *string {
 
 	// unix convention eg. /var/run/service.pid
 	pidFile := pidDir + execFile + ".pid"
-	log.Println(pidFile)
+	dlog.Println(pidFile)
 	return &pidFile
 }
 
 func (id *Daemon) pidSave(pid int) bool {
-	log.Println("Daemon.pidSave")
+	dlog.Println("Daemon.pidSave")
 	lockFile := id.pidFile()
 	if lockFile == nil {
 		return false
@@ -82,7 +110,7 @@ func (id *Daemon) pidSave(pid int) bool {
 }
 
 func (id *Daemon) pidRead() int {
-	log.Println("Daemon.pidRead")
+	dlog.Println("Daemon.pidRead")
 	lockFile := id.pidFile()
 	if lockFile == nil {
 		return -1
@@ -95,14 +123,14 @@ func (id *Daemon) pidRead() int {
 
 	data, err := ioutil.ReadFile(*lockFile)
 	if err != nil {
-		fmt.Println("Unable to read process lock", err)
+		log.Println("Unable to read process lock", err)
 		id.pidClear()
 		return -1
 	}
 
 	pid, err := strconv.Atoi(string(data))
 	if err != nil {
-		fmt.Println("Unable to parse process id ", err)
+		log.Println("Unable to parse process id ", err)
 		id.pidClear()
 		return -1
 	}
@@ -111,70 +139,77 @@ func (id *Daemon) pidRead() int {
 }
 
 func (id *Daemon) pidClear() {
-	log.Println("Daemon.pidClear")
+	dlog.Println("Daemon.pidClear")
 	lockFile := id.pidFile()
 	os.Remove(*lockFile)
 }
 
 func (id *Daemon) status() {
+	dlog.Println("Daemon.status")
 	pid := id.pidRead()
 	if pid != -1 {
-		fmt.Println("Process is running or lock file exists")
+		log.Println("Process is running or lock file exists", pid)
 	} else {
-		fmt.Println("Process is stopped")
+		log.Println("Process is stopped")
 	}
 }
 
 func (id *Daemon) start() {
+	dlog.Println("Daemon.start")
 	pid := id.pidRead()
 	if pid != -1 {
-		fmt.Println("Already running or lock file exists")
-		os.Exit(1)
+		process, _ := os.FindProcess(pid)
+		err := process.Signal(syscall.Signal(0))
+		if err == nil {
+			log.Println("Process already running", pid)
+			os.Exit(1)
+		}
+		// process absent, clear the pid file
+		id.pidClear()
 	}
 
 	cmd := exec.Command(os.Args[0], "run")
 	cmd.Start()
-	fmt.Println("Started", cmd.Process.Pid)
+	log.Println("Started", cmd.Process.Pid)
 	id.pidSave(cmd.Process.Pid)
 }
 
 func (id *Daemon) stop() {
+	dlog.Println("Daemon.stop")
 	pid := id.pidRead()
 	if pid == -1 {
-		fmt.Println("Not running")
+		log.Println("Not running")
 		os.Exit(1)
 	}
 
-	process, err := os.FindProcess(pid)
+	process, _ := os.FindProcess(pid)
+	err := process.Signal(syscall.Signal(0))
 	if err != nil {
-		fmt.Println("Unable to find", pid, err)
+		log.Println("Failed to signal", pid, err)
 		os.Exit(1)
 	}
-
-	id.pidClear()
 
 	err = process.Kill()
 	if err != nil {
-		fmt.Println("Failed to stop", pid, err)
-	} else {
-		fmt.Println("Stopped", pid)
+		log.Println("Failed to stop", pid, err)
+		os.Exit(1)
 	}
+
+	log.Println("Stopped", pid)
+	id.pidClear()
 }
 
 func (id *Daemon) run() {
+	dlog.Println("Daemon.run")
+	log.Println("process run command")
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, os.Kill, syscall.SIGTERM)
 
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Println("Recovered from", r)
-				// respawn?
-			}
-		}()
 		<-signalCh
+		// may not appear in log
+		log.Println("process stop command")
 		signal.Stop(signalCh)
-		fmt.Println("Exit command received. Exiting...")
 		id.pidClear()
 		os.Exit(0)
 	}()
@@ -182,6 +217,7 @@ func (id *Daemon) run() {
 
 // Main export
 func (id *Daemon) Main() {
+	dlog.Println("Daemon.Main")
 	op := "run"
 	if len(os.Args) > 1 {
 		op = strings.TrimSpace(strings.ToLower(os.Args[1]))
@@ -189,23 +225,24 @@ func (id *Daemon) Main() {
 
 	switch op {
 	case "run":
-		fmt.Println("Running ...")
+		dlog.Println("Running ...")
 		id.run()
 		break
 	case "start":
-		fmt.Println("Starting ...")
+		dlog.Println("Starting ...")
 		id.start()
 		os.Exit(0)
 	case "stop":
-		fmt.Println("Stopping ...")
+		dlog.Println("Stopping ...")
 		id.stop()
 		os.Exit(0)
 	case "restart":
-		fmt.Println("Restarting ...")
+		dlog.Println("Restarting ...")
 		id.stop()
 		id.start()
 		os.Exit(0)
 	case "status":
+		dlog.Println("Status ...")
 		id.status()
 		os.Exit(0)
 	}
