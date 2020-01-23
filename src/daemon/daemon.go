@@ -14,7 +14,7 @@ import (
 )
 
 // Version export
-const Version = "1.3.0"
+const Version = "1.3.1"
 
 // standard logger
 var log *oslog.Logger
@@ -60,7 +60,7 @@ func ServiceProcess(pid int) *os.Process {
 }
 
 // ServiceLogger returns configred *os.Logger
-func ServiceLogger(pid int) *oslog.Logger {
+func ServiceLogger() *oslog.Logger {
 	return log
 }
 
