@@ -14,7 +14,7 @@ import (
 )
 
 // Version export
-const Version = "1.0.1"
+const Version = "1.1.0"
 
 // Daemon type
 type Daemon struct {
@@ -33,7 +33,25 @@ func (id *Daemon) pidFile() *string {
 		return nil
 	}
 	_, execFile := filepath.Split(execName)
-	pidFile := "/tmp/" + execFile + ".lock"
+
+	// strip version suffix eg. service-1.0.0 -> service
+	verSuffix := strings.LastIndex(execFile, "-")
+	if verSuffix != -1 {
+		execFile = execFile[:verSuffix]
+	}
+
+	pidDir := "/var/run/"
+	var stat syscall.Stat_t
+	if syscall.Stat(pidDir, &stat) == nil {
+		dirUID := int(stat.Uid)
+		if dirUID != os.Geteuid() && dirUID != os.Geteuid() {
+			// can't write to /var/run, use /tmp
+			pidDir = "/tmp/"
+		}
+	}
+
+	// unix convention eg. /var/run/service.pid
+	pidFile := pidDir + execFile + ".pid"
 	log.Println(pidFile)
 	return &pidFile
 }
@@ -55,7 +73,7 @@ func (id *Daemon) pidSave(pid int) bool {
 
 	_, err = pidFile.WriteString(strconv.Itoa(pid))
 	if err != nil {
-		log.Printf("Unable to write pid file", err)
+		log.Println("Unable to write pid file", err)
 		return false
 	}
 
