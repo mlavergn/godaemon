@@ -14,7 +14,7 @@ import (
 )
 
 // Version export
-const Version = "1.2.0"
+const Version = "1.3.0"
 
 // standard logger
 var log *oslog.Logger
@@ -22,13 +22,51 @@ var log *oslog.Logger
 // debug logger
 var dlog *oslog.Logger
 
-func init() {
+// IsDaemon determines if proc can be assumed to be a daemon
+func IsDaemon() bool {
 	// if we were launched by a startup process -or- our group is a system
-	isDaemon := os.Getppid() < 100 || os.Getpid()-os.Getppid() == 1
-	if isDaemon {
-		filePath, _ := os.Executable()
-		_, fileName := filepath.Split(filePath)
-		logSys, err := syslog.New(syslog.LOG_WARNING, fileName)
+	return os.Getppid() < 100 || os.Getpid()-os.Getppid() == 1
+}
+
+// ServiceName generates a daemon name from the current executable
+func ServiceName() string {
+	execName, err := os.Executable()
+	if err != nil {
+		log.Println("Unable to obtain executable name", err)
+		return "unknown"
+	}
+	_, svcName := filepath.Split(execName)
+
+	// strip version suffix eg. service-1.0.0 -> service
+	verSuffix := strings.LastIndex(svcName, "-")
+	if verSuffix != -1 {
+		svcName = svcName[:verSuffix]
+	}
+
+	return svcName
+}
+
+// ServiceProcess returns *os.Process if the service is running, otherwise nil
+func ServiceProcess(pid int) *os.Process {
+	process, _ := os.FindProcess(pid)
+	err := process.Signal(syscall.Signal(0))
+	if err != nil {
+		if strings.Contains(err.Error(), "finished") || strings.Contains(err.Error(), "no such process") {
+			return nil
+		}
+		log.Println(err)
+	}
+	return process
+}
+
+// ServiceLogger returns configred *os.Logger
+func ServiceLogger(pid int) *oslog.Logger {
+	return log
+}
+
+func init() {
+	if IsDaemon() {
+		logSys, err := syslog.New(syslog.LOG_WARNING, ServiceName())
 		if err == nil {
 			log = oslog.New(logSys, "", 0)
 			log.Println("syslog logging enabled")
@@ -55,19 +93,6 @@ func NewDaemon() *Daemon {
 
 func (id *Daemon) pidFile() *string {
 	dlog.Println("Daemon.pidFile")
-	execName, err := os.Executable()
-	if err != nil {
-		log.Println("Unable to obtain executable name", err)
-		return nil
-	}
-	_, execFile := filepath.Split(execName)
-
-	// strip version suffix eg. service-1.0.0 -> service
-	verSuffix := strings.LastIndex(execFile, "-")
-	if verSuffix != -1 {
-		execFile = execFile[:verSuffix]
-	}
-
 	pidDir := "/var/run/"
 	var stat syscall.Stat_t
 	if syscall.Stat(pidDir, &stat) == nil {
@@ -79,7 +104,7 @@ func (id *Daemon) pidFile() *string {
 	}
 
 	// unix convention eg. /var/run/service.pid
-	pidFile := pidDir + execFile + ".pid"
+	pidFile := pidDir + ServiceName() + ".pid"
 	dlog.Println(pidFile)
 	return &pidFile
 }
@@ -148,19 +173,23 @@ func (id *Daemon) status() {
 	dlog.Println("Daemon.status")
 	pid := id.pidRead()
 	if pid != -1 {
-		log.Println("Process is running or lock file exists", pid)
-	} else {
-		log.Println("Process is stopped")
+		process := ServiceProcess(pid)
+		if process != nil {
+			log.Println("Process is running", pid)
+			os.Exit(1)
+		}
+		// process absent, clear the pid file
+		id.pidClear()
 	}
+	log.Println("Process is stopped")
 }
 
 func (id *Daemon) start() {
 	dlog.Println("Daemon.start")
 	pid := id.pidRead()
 	if pid != -1 {
-		process, _ := os.FindProcess(pid)
-		err := process.Signal(syscall.Signal(0))
-		if err == nil {
+		process := ServiceProcess(pid)
+		if process != nil {
 			log.Println("Process already running", pid)
 			os.Exit(1)
 		}
@@ -182,14 +211,14 @@ func (id *Daemon) stop() {
 		os.Exit(1)
 	}
 
-	process, _ := os.FindProcess(pid)
-	err := process.Signal(syscall.Signal(0))
-	if err != nil {
-		log.Println("Failed to signal", pid, err)
+	process := ServiceProcess(pid)
+	if process == nil {
+		id.pidClear()
+		log.Println("Not running, cleared pid")
 		os.Exit(1)
 	}
 
-	err = process.Kill()
+	err := process.Kill()
 	if err != nil {
 		log.Println("Failed to stop", pid, err)
 		os.Exit(1)
