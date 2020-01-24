@@ -8,7 +8,7 @@
 
 .PHONY: test
 
-VERSION := 1.3.1
+VERSION := 1.3.2
 
 ver:
 	@sed -i '' 's/^const Version = "[0-9]\{1,3\}.[0-9]\{1,3\}.[0-9]\{1,3\}"/const Version = "${VERSION}"/' src/daemon/daemon.go
@@ -21,7 +21,6 @@ build:
 
 demo: build
 	go build -o demo cmd/demo.go
-	./demo
 
 clean:
 	rm -f demo

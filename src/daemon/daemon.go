@@ -14,7 +14,7 @@ import (
 )
 
 // Version export
-const Version = "1.3.1"
+const Version = "1.3.2"
 
 // standard logger
 var log *oslog.Logger
@@ -197,7 +197,7 @@ func (id *Daemon) start() {
 		id.pidClear()
 	}
 
-	cmd := exec.Command(os.Args[0], "run")
+	cmd := exec.Command(os.Args[0])
 	cmd.Start()
 	log.Println("Started", cmd.Process.Pid)
 	id.pidSave(cmd.Process.Pid)
