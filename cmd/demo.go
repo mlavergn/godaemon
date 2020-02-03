@@ -1,22 +1,26 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"time"
 
 	"github.com/mlavergn/godaemon/src/daemon"
 )
 
 func main() {
-	fmt.Println("Go Daemon Demo")
+	log.Println("Go Daemon Demo")
 
-	daemon := daemon.NewDaemon()
-	daemon.Main()
+	// only required line
+	daemon.NewDaemon().Main()
+
+	log := daemon.Logger()
+	log.Println("Go Daemon Demo running ...")
 
 	closeCh := make(chan bool, 1)
 	go func() {
-		fmt.Println("Hello")
+		log.Println("Hello")
 		<-time.After(10 * time.Second)
+		log.Println("Bye")
 
 		// simulate panic
 		// panicCh := make(chan bool)

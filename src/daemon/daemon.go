@@ -14,7 +14,7 @@ import (
 )
 
 // Version export
-const Version = "1.3.2"
+const Version = "1.4.0"
 
 // standard logger
 var log *oslog.Logger
@@ -22,14 +22,20 @@ var log *oslog.Logger
 // debug logger
 var dlog *oslog.Logger
 
-// IsDaemon determines if proc can be assumed to be a daemon
+// Package level functions
+
+// IsDaemon determines if the current process qualifies as a daemon
 func IsDaemon() bool {
-	// if we were launched by a startup process -or- our group is a system
-	return os.Getppid() < 100 || os.Getpid()-os.Getppid() == 1
+	// Indicators of daemon process:
+	// 1) We were launched by a startup process (parent PID is a system PID)
+	// 2) Current pid is + 1 of parent PID (indicates we were exec'd)
+	// 3) An arg count of 3 or more indicates we have a fork flag
+	return os.Getppid() < 100 || os.Getpid()-os.Getppid() == 1 || len(os.Args) >= 3
 }
 
-// ServiceName generates a daemon name from the current executable
-func ServiceName() string {
+// Name generates a daemon name from the current executable
+// using the executable stripped of version suffixes
+func Name() string {
 	execName, err := os.Executable()
 	if err != nil {
 		log.Println("Unable to obtain executable name", err)
@@ -46,8 +52,8 @@ func ServiceName() string {
 	return svcName
 }
 
-// ServiceProcess returns *os.Process if the service is running, otherwise nil
-func ServiceProcess(pid int) *os.Process {
+// resolveProcess returns *os.resolveProcess if the service is running, otherwise nil
+func resolveProcess(pid int) *os.Process {
 	process, _ := os.FindProcess(pid)
 	err := process.Signal(syscall.Signal(0))
 	if err != nil {
@@ -59,27 +65,28 @@ func ServiceProcess(pid int) *os.Process {
 	return process
 }
 
-// ServiceLogger returns configred *os.Logger
-func ServiceLogger() *oslog.Logger {
+// Logger returns configred *os.Logger
+func Logger() *oslog.Logger {
 	return log
 }
 
 func init() {
 	if IsDaemon() {
-		logSys, err := syslog.New(syslog.LOG_WARNING, ServiceName())
+		syslogWriter, err := syslog.New(syslog.LOG_WARNING, Name())
 		if err == nil {
-			log = oslog.New(logSys, "", 0)
-			log.Println("syslog logging enabled")
+			log = oslog.New(syslogWriter, "", 0)
 		} else {
 			log = oslog.New(ioutil.Discard, "", 0)
 		}
+		dlog = oslog.New(ioutil.Discard, "", 0)
+		// for debugging uncomment:
+		// dlog = oslog.New(syslogWriter, "GoDaemon ", oslog.Ltime|oslog.Lshortfile)
 	} else {
-		log = oslog.New(os.Stdout, "", 0)
+		log = oslog.New(os.Stderr, "", 0)
+		dlog = oslog.New(ioutil.Discard, "", 0)
+		// for debugging uncomment:
+		// 	dlog = oslog.New(os.Stdout, "GoDaemon ", oslog.Ltime|oslog.Lshortfile)
 	}
-
-	// for debugging uncomment:
-	// dlog = oslog.New(ioutil.Discard, "GoDaemon", oslog.Ltime|oslog.Lshortfile)
-	dlog = oslog.New(ioutil.Discard, "", 0)
 }
 
 // Daemon type
@@ -90,6 +97,8 @@ type Daemon struct {
 func NewDaemon() *Daemon {
 	return &Daemon{}
 }
+
+// PID lock file methods
 
 func (id *Daemon) pidFile() *string {
 	dlog.Println("Daemon.pidFile")
@@ -104,13 +113,12 @@ func (id *Daemon) pidFile() *string {
 	}
 
 	// unix convention eg. /var/run/service.pid
-	pidFile := pidDir + ServiceName() + ".pid"
-	dlog.Println(pidFile)
+	pidFile := pidDir + Name() + ".pid"
 	return &pidFile
 }
 
-func (id *Daemon) pidSave(pid int) bool {
-	dlog.Println("Daemon.pidSave")
+func (id *Daemon) pidSet(pid int) bool {
+	dlog.Println("Daemon.pidSet")
 	lockFile := id.pidFile()
 	if lockFile == nil {
 		return false
@@ -134,7 +142,7 @@ func (id *Daemon) pidSave(pid int) bool {
 	return true
 }
 
-func (id *Daemon) pidRead() int {
+func (id *Daemon) pidGet() int {
 	dlog.Println("Daemon.pidRead")
 	lockFile := id.pidFile()
 	if lockFile == nil {
@@ -169,110 +177,197 @@ func (id *Daemon) pidClear() {
 	os.Remove(*lockFile)
 }
 
-func (id *Daemon) status() {
+// initd handlers
+
+func (id *Daemon) statusHandler() bool {
 	dlog.Println("Daemon.status")
-	pid := id.pidRead()
+	pid := id.pidGet()
 	if pid != -1 {
-		process := ServiceProcess(pid)
+		process := resolveProcess(pid)
 		if process != nil {
 			log.Println("Process is running", pid)
-			os.Exit(1)
+			return true
 		}
 		// process absent, clear the pid file
 		id.pidClear()
 	}
-	log.Println("Process is stopped")
+	log.Println("Process not running")
+	return false
 }
 
-func (id *Daemon) start() {
-	dlog.Println("Daemon.start")
-	pid := id.pidRead()
-	if pid != -1 {
-		process := ServiceProcess(pid)
-		if process != nil {
-			log.Println("Process already running", pid)
-			os.Exit(1)
+func (id *Daemon) startHandler(fork bool, lock bool) {
+	dlog.Println("Daemon.start fork", fork)
+
+	if fork {
+		if id.statusHandler() {
+			return
 		}
-		// process absent, clear the pid file
 		id.pidClear()
+
+		cmd := exec.Command(os.Args[0], "start", "nofork", "lock")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		err := cmd.Start()
+		if err != nil {
+			log.Println(err)
+		}
+		log.Println("Started", cmd.Process.Pid)
+		return
 	}
 
-	cmd := exec.Command(os.Args[0])
-	cmd.Start()
-	log.Println("Started", cmd.Process.Pid)
-	id.pidSave(cmd.Process.Pid)
-}
+	// from this point down, daemon code will be executed
 
-func (id *Daemon) stop() {
-	dlog.Println("Daemon.stop")
-	pid := id.pidRead()
-	if pid == -1 {
-		log.Println("Not running")
-		os.Exit(1)
+	if lock {
+		id.pidSet(os.Getpid())
 	}
 
-	process := ServiceProcess(pid)
-	if process == nil {
-		id.pidClear()
-		log.Println("Not running, cleared pid")
-		os.Exit(1)
-	}
-
-	err := process.Kill()
-	if err != nil {
-		log.Println("Failed to stop", pid, err)
-		os.Exit(1)
-	}
-
-	log.Println("Stopped", pid)
-	id.pidClear()
-}
-
-func (id *Daemon) run() {
-	dlog.Println("Daemon.run")
-	log.Println("process run command")
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, os.Kill, syscall.SIGTERM)
 
 	go func() {
 		<-signalCh
 		// may not appear in log
-		log.Println("process stop command")
+		log.Println("Exiting", os.Getpid())
 		signal.Stop(signalCh)
-		id.pidClear()
+		if os.Getpid() == id.pidGet() {
+			id.pidClear()
+		}
 		os.Exit(0)
 	}()
+}
+
+func (id *Daemon) stopHandler() bool {
+	dlog.Println("Daemon.stop")
+	pid := id.pidGet()
+	if pid == -1 {
+		log.Println("Not running")
+		return false
+	}
+
+	process := resolveProcess(pid)
+	if process == nil {
+		id.pidClear()
+		log.Println("Not running, cleared pid")
+		return false
+	}
+
+	// signal the daemonzied process to terminate and wait
+	process.Signal(syscall.SIGTERM)
+	process.Wait()
+
+	log.Println("Stopped", pid)
+	id.pidClear()
+	return true
+}
+
+// Mimics an inittab respawnHandler entry
+func (id *Daemon) respawnHandler(fork bool) {
+	dlog.Println("Daemon.respawn fork", fork)
+
+	if fork {
+		if id.statusHandler() {
+			return
+		}
+		id.pidClear()
+
+		cmd := exec.Command(os.Args[0], "respawn", "nofork")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		err := cmd.Start()
+		if err != nil {
+			log.Println(err)
+		}
+		log.Println("Started", cmd.Process.Pid)
+		return
+	}
+
+	// from this point down, daemon code will be executed
+
+	id.pidSet(os.Getpid())
+
+	exitCh := make(chan bool, 1)
+	defer close(exitCh)
+
+	var cmd *exec.Cmd
+
+	go func() {
+		signalCh := make(chan os.Signal, 1)
+		// signal.Notify(signalCh, os.Kill, syscall.SIGTERM)
+		signal.Notify(signalCh, os.Interrupt, os.Kill, syscall.SIGTERM)
+		defer close(signalCh)
+
+		<-signalCh
+		log.Println("Stopping respawn", os.Getpid())
+		signal.Stop(signalCh)
+		// clear the pid lock
+		if os.Getpid() == id.pidGet() {
+			id.pidClear()
+		}
+		// kill the managed process
+		if cmd != nil {
+			cmd.Process.Signal(syscall.SIGTERM)
+		}
+		// signal it's safe to exit
+		exitCh <- true
+	}()
+
+	for {
+		select {
+		case <-exitCh:
+			log.Println("Respawn stopped", os.Getpid())
+			return
+		default:
+			log.Println("Respawning ...")
+			cmd = exec.Command(os.Args[0], "start", "nofork", "nolock")
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			cmd.Run()
+			log.Println("Daemon exited")
+		}
+	}
 }
 
 // Main export
 func (id *Daemon) Main() {
 	dlog.Println("Daemon.Main")
-	op := "run"
+	op := "start"
+	fork := false
+	lock := false
 	if len(os.Args) > 1 {
 		op = strings.TrimSpace(strings.ToLower(os.Args[1]))
+		// if we we not passed a fork parameter, defaul to fork true
+		if len(os.Args) == 2 {
+			fork = true
+		}
+	}
+	if len(os.Args) > 2 {
+		fork = strings.TrimSpace(strings.ToLower(os.Args[2])) == "fork"
+	}
+	if len(os.Args) > 3 {
+		lock = strings.TrimSpace(strings.ToLower(os.Args[3])) == "lock"
 	}
 
 	switch op {
-	case "run":
-		dlog.Println("Running ...")
-		id.run()
-		break
 	case "start":
 		dlog.Println("Starting ...")
-		id.start()
-		os.Exit(0)
+		id.startHandler(fork, lock)
+		if fork {
+			// only exit if forked
+			os.Exit(0)
+		}
 	case "stop":
 		dlog.Println("Stopping ...")
-		id.stop()
+		id.stopHandler()
 		os.Exit(0)
 	case "restart":
 		dlog.Println("Restarting ...")
-		id.stop()
-		id.start()
+		id.stopHandler()
+		id.startHandler(true, true)
 		os.Exit(0)
 	case "status":
 		dlog.Println("Status ...")
-		id.status()
+		id.statusHandler()
+		os.Exit(0)
+	case "respawn":
+		dlog.Println("Respawn ...")
+		id.respawnHandler(fork)
 		os.Exit(0)
 	}
 }
