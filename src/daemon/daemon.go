@@ -14,13 +14,54 @@ import (
 )
 
 // Version export
-const Version = "1.4.0"
+const Version = "1.4.1"
+
+// DEBUG flag
+const DEBUG = false
 
 // standard logger
 var log *oslog.Logger
 
 // debug logger
 var dlog *oslog.Logger
+
+// Logger returns configred *os.Logger
+func Logger() *oslog.Logger {
+	return log
+}
+
+// Config export
+func Config(debug bool, logger *oslog.Logger) {
+	if logger != nil {
+		log = logger
+		if debug {
+			dlog = logger
+		}
+		return
+	}
+
+	if IsDaemon() {
+		syslogWriter, err := syslog.New(syslog.LOG_WARNING, Name())
+		if err == nil {
+			log = oslog.New(syslogWriter, "", 0)
+		}
+		if debug {
+			dlog = log
+		}
+		return
+	}
+
+	log = oslog.New(os.Stdout, "", 0)
+	if debug {
+		dlog = oslog.New(os.Stdout, "GoDaemon ", oslog.Ltime|oslog.Lshortfile)
+	} else {
+		dlog = oslog.New(ioutil.Discard, "GoDaemon ", 0)
+	}
+}
+
+func init() {
+	Config(DEBUG, nil)
+}
 
 // Package level functions
 
@@ -63,30 +104,6 @@ func resolveProcess(pid int) *os.Process {
 		log.Println(err)
 	}
 	return process
-}
-
-// Logger returns configred *os.Logger
-func Logger() *oslog.Logger {
-	return log
-}
-
-func init() {
-	if IsDaemon() {
-		syslogWriter, err := syslog.New(syslog.LOG_WARNING, Name())
-		if err == nil {
-			log = oslog.New(syslogWriter, "", 0)
-		} else {
-			log = oslog.New(ioutil.Discard, "", 0)
-		}
-		dlog = oslog.New(ioutil.Discard, "", 0)
-		// for debugging uncomment:
-		// dlog = oslog.New(syslogWriter, "GoDaemon ", oslog.Ltime|oslog.Lshortfile)
-	} else {
-		log = oslog.New(os.Stderr, "", 0)
-		dlog = oslog.New(ioutil.Discard, "", 0)
-		// for debugging uncomment:
-		// 	dlog = oslog.New(os.Stdout, "GoDaemon ", oslog.Ltime|oslog.Lshortfile)
-	}
 }
 
 // Daemon type
@@ -315,7 +332,7 @@ func (id *Daemon) respawnHandler(fork bool) {
 			log.Println("Respawn stopped", os.Getpid())
 			return
 		default:
-			log.Println("Respawning ...")
+			log.Println("Respawning", os.Args[0])
 			cmd = exec.Command(os.Args[0], "start", "nofork", "nolock")
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 			cmd.Run()
