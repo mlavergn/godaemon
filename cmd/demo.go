@@ -1,20 +1,34 @@
 package main
 
 import (
-	"log"
+	oslog "log"
 	"time"
 
 	"github.com/mlavergn/godaemon/src/daemon"
 )
 
+// standard logger
+var log *oslog.Logger
+
+func showProcessInfo() {
+	proc := daemon.NewProcessMetaCurrent()
+	log.Println("Child name:pid:daemonized", proc.Name(), proc.Pid, proc.IsDaemon())
+	parent := proc.Parent()
+	log.Println("Parent name:pid", parent.Name(), parent.Pid)
+}
+
 func main() {
-	log.Println("Go Daemon Demo")
+	oslog.Println("Go Daemon Demo")
+
+	log = daemon.Syslogger("demo")
+	daemon.Config(true, log)
 
 	// only required line
 	daemon.NewDaemon().Main()
 
-	log := daemon.Logger()
+	// log = daemon.Logger()
 	log.Println("Go Daemon Demo running ...")
+	showProcessInfo()
 
 	closeCh := make(chan bool, 1)
 	go func() {
