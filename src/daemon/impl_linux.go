@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func processMetaNameImpl(pid int) string {
+func ProcessInfoNameImpl(pid int) string {
 	statPath := "/proc/" + strconv.Itoa(pid) + "/stat"
 	data, err := ioutil.ReadFile(statPath)
 	if err != nil {

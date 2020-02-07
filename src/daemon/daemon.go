@@ -17,7 +17,7 @@ import (
 // init
 
 // Version export
-const Version = "1.5.0"
+const Version = "1.6.0"
 
 // DEBUG flag
 const DEBUG = false
@@ -48,15 +48,19 @@ func Config(debug bool, logger *oslog.Logger) {
 		log = logger
 		if debug {
 			dlog = logger
+		} else {
+			dlog = oslog.New(ioutil.Discard, "", 0)
 		}
 		return
 	}
 
-	proc := NewProcessMetaCurrent()
+	proc := NewProcessInfoCurrent()
 	if proc.IsDaemon() {
-		log = Syslogger(proc.Name())
+		log = Syslogger(proc.Name)
 		if debug {
 			dlog = log
+		} else {
+			dlog = oslog.New(ioutil.Discard, "", 0)
 		}
 		return
 	}
@@ -76,58 +80,95 @@ func init() {
 // ----------------------------------------------------------------------------
 // process
 
-// ProcessMeta export
-type ProcessMeta struct {
+// ProcessInfo export
+type ProcessInfo struct {
 	Pid       int
 	ParentPid int
+	Name      string
+	FullName  string
+	Path      string
 }
 
-// NewProcessMetaCurrent current
-func NewProcessMetaCurrent() *ProcessMeta {
-	return NewProcessMetaPid(os.Getpid())
+// NewProcessInfoCurrent current
+func NewProcessInfoCurrent() *ProcessInfo {
+	return NewProcessInfoPid(os.Getpid())
 }
 
-// NewProcessMetaPid export
-func NewProcessMetaPid(pid int) *ProcessMeta {
-	id := &ProcessMeta{
+// NewProcessInfoPid export
+func NewProcessInfoPid(pid int) *ProcessInfo {
+	id := &ProcessInfo{
 		Pid:       pid,
 		ParentPid: -1,
 	}
+
+	// check for parent pid
 	if pid != -1 && id.IsCurrent() {
 		id.ParentPid = os.Getppid()
 	}
+
+	// obtain the executable path
+	fullPath := ""
+	if pid == os.Getpid() {
+		var err error
+		fullPath, err = os.Executable()
+		if err != nil {
+			log.Println("Unable to obtain executable path", err)
+			return nil
+		}
+	} else {
+		fullPath = ProcessInfoNameImpl(id.Pid)
+	}
+
+	// resolve symlinks
+	realPath, symErr := os.Readlink(fullPath)
+	if symErr == nil {
+		// will fall in here if we resolved a symlink
+		fullPath = realPath
+	}
+
+	// split the executable path and filename
+	basePath, fullName := filepath.Split(fullPath)
+	id.FullName = fullName
+	if len(basePath) > 0 {
+		cwdPath, err := os.Getwd()
+		if err == nil && strings.HasPrefix(basePath, cwdPath) {
+			basePath = "." + basePath[len(cwdPath):]
+		}
+		id.Path = basePath
+	} else {
+		id.Path = "./"
+	}
+
+	shortName := fullName
+	suffix := strings.LastIndex(shortName, "-")
+	if suffix != -1 {
+		shortName = shortName[:suffix]
+	}
+	id.Name = shortName
+
 	return id
 }
 
 // IsCurrent export
-func (id *ProcessMeta) IsCurrent() bool {
+func (id *ProcessInfo) IsCurrent() bool {
 	return id.Pid == os.Getpid()
 }
 
 // Parent export
-func (id *ProcessMeta) Parent() *ProcessMeta {
+func (id *ProcessInfo) Parent() *ProcessInfo {
 	if id.ParentPid != -1 {
-		return NewProcessMetaPid(id.ParentPid)
+		return NewProcessInfoPid(id.ParentPid)
 	}
 	return nil
 }
 
-// Name export
-func (id *ProcessMeta) Name() string {
-	if id.IsCurrent() {
-		execPath, err := os.Executable()
-		if err != nil {
-			log.Println("Unable to obtain executable path", err)
-			return ""
-		}
-		_, execName := filepath.Split(execPath)
-		return execName
-	}
-	return processMetaNameImpl(id.Pid)
+// FullPath export
+func (id *ProcessInfo) FullPath() string {
+	return id.Path + id.FullName
 }
 
 // IsDaemon determines if the current process qualifies as a daemon
-func (id *ProcessMeta) IsDaemon() bool {
+func (id *ProcessInfo) IsDaemon() bool {
 	// Indicators of daemon process:
 	// 1) We were launched by a startup process (parent PID is a system PID)
 	// 2) Current pid is + 1 of parent PID (indicates we were exec'd)
@@ -136,51 +177,55 @@ func (id *ProcessMeta) IsDaemon() bool {
 	return parent.Pid != -1 && (parent.Pid == 1 || id.Pid-parent.Pid == 1 || id.IsForkOf(parent))
 }
 
-// SemanticlessName name stripped of any version suffix
-func (id *ProcessMeta) SemanticlessName() string {
-	// strip version suffix eg. service-1.0.0 -> service
-	name := id.Name()
-	suffix := strings.LastIndex(name, "-")
-	if suffix != -1 {
-		name = name[:suffix]
-	}
-
-	return name
-}
-
 // Process returns *os.resolveProcess if the process is running, otherwise nil
-func (id *ProcessMeta) Process() *os.Process {
+func (id *ProcessInfo) Process() *os.Process {
+	dlog.Println("ProcessInfo.Process")
 	process, _ := os.FindProcess(id.Pid)
 	err := process.Signal(syscall.Signal(0))
 	if err != nil {
 		if strings.Contains(err.Error(), "finished") || strings.Contains(err.Error(), "no such process") {
 			return nil
 		}
-		log.Println(err)
+		dlog.Println("ProcessInfo.Process signal failed but ignored", err)
 	}
 	return process
 }
 
 // IsForkOf export
-func (id *ProcessMeta) IsForkOf(parent *ProcessMeta) bool {
-	return id.ParentPid == parent.Pid && id.Name() == parent.Name()
+func (id *ProcessInfo) IsForkOf(parent *ProcessInfo) bool {
+	return id.ParentPid == parent.Pid && id.Name == parent.Name
 }
 
 // RestartParent export
-func (id *ProcessMeta) RestartParent() {
+func (id *ProcessInfo) RestartParent(updatePath string) {
+	dlog.Println("ProcessInfo.RestartParent")
 	parent := id.Parent()
 	if parent == nil {
+		log.Println("ProcessInfo.RestartParent failed to id parent process")
 		return
 	}
-	proc := parent.Process()
-	if proc != nil {
+	parentProc := parent.Process()
+	dlog.Println("ProcessInfo.RestartParent parent proc", parentProc)
+	if parentProc != nil {
 		if id.IsForkOf(parent) {
-			proc.Kill()
-			cmd := exec.Command(os.Args[0], "respawn")
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-			cmd.Start()
-			os.Exit(0)
+			dlog.Println("ProcessInfo.RestartParent fork confirmed, killing parent", parent.Pid)
+			kerr := parentProc.Kill()
+			if kerr != nil {
+				log.Println("ProcessInfo.RestartParent failed to kill parent", kerr)
+				return
+			}
+		} else {
+			log.Println("Fork no detected, attempting restart wihtout kill", id, parent)
 		}
+		dlog.Println("ProcessInfo.RestartParent killed parent, respawning", updatePath)
+		cmd := exec.Command(updatePath, "respawn", "fork")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		serr := cmd.Run()
+		if serr != nil {
+			log.Println("ProcessInfo.RestartParent failed to respawn parent", serr)
+			return
+		}
+		dlog.Println("ProcessInfo.RestartParent respawned parent", cmd.Process.Pid)
 	}
 }
 
@@ -206,13 +251,13 @@ func NewPidFile() *PidFile {
 	}
 
 	id := &PidFile{
-		lockPath: pidDir + NewProcessMetaCurrent().Name() + ".pid",
+		lockPath: pidDir + NewProcessInfoCurrent().Name + ".pid",
 	}
 	return id
 }
 
 func (id *PidFile) set(pid int) bool {
-	log.Println("PidFile.set")
+	dlog.Println("PidFile.set")
 
 	pidFile, err := os.Create(id.lockPath)
 	if err != nil {
@@ -233,11 +278,11 @@ func (id *PidFile) set(pid int) bool {
 }
 
 func (id *PidFile) get() int {
-	log.Println("PidFile.get")
+	dlog.Println("PidFile.get")
 
 	_, err := os.Stat(id.lockPath)
 	if err != nil {
-		log.Println("Unable to find process lock", id.lockPath, err)
+		dlog.Println("Unable to find process lock", id.lockPath, err)
 		return -1
 	}
 
@@ -259,7 +304,7 @@ func (id *PidFile) get() int {
 }
 
 func (id *PidFile) clear() {
-	log.Println("PidFile.clear")
+	dlog.Println("PidFile.clear")
 	os.Remove(id.lockPath)
 }
 
@@ -282,20 +327,20 @@ func (id *Daemon) statusHandler() bool {
 	pidFile := NewPidFile()
 	pid := pidFile.get()
 	if pid != -1 {
-		process := NewProcessMetaPid(pid).Process()
+		process := NewProcessInfoPid(pid).Process()
 		if process != nil {
-			log.Println("Process is running", pid)
+			log.Println("running", pid)
 			return true
 		}
 		// process absent, clear the pid file
 		pidFile.clear()
 	}
-	log.Println("Process not running")
+	log.Println("not running")
 	return false
 }
 
 func (id *Daemon) startHandler(fork bool, lock bool) {
-	log.Println("Daemon.start fork:lock", fork, lock)
+	dlog.Println("Daemon.start fork:lock", fork, lock)
 
 	pidFile := NewPidFile()
 
@@ -305,19 +350,20 @@ func (id *Daemon) startHandler(fork bool, lock bool) {
 		}
 		pidFile.clear()
 
-		cmd := exec.Command(os.Args[0], "start", "nofork", "lock")
+		proc := NewProcessInfoCurrent()
+		cmd := exec.Command(proc.FullPath(), "start", "nofork", "lock")
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		err := cmd.Start()
 		if err != nil {
-			log.Println(err)
+			log.Println("failed to exec", proc.FullPath(), err)
 		}
-		log.Println("Started", cmd.Process.Pid)
+		log.Println("started", cmd.Process.Pid)
 		return
 	}
 
 	// from this point down, daemon code will be executed
 
-	proc := NewProcessMetaCurrent()
+	proc := NewProcessInfoCurrent()
 	if lock {
 		pidFile.set(proc.Pid)
 	}
@@ -328,11 +374,12 @@ func (id *Daemon) startHandler(fork bool, lock bool) {
 	go func() {
 		<-signalCh
 		// may not appear in log
-		log.Println("Exiting", proc.Pid)
+		log.Println("caught SIGTERM", proc.Pid)
 		signal.Stop(signalCh)
 		if pidFile.get() == proc.Pid {
 			pidFile.clear()
 		}
+		log.Println("exiting", proc.Pid)
 		os.Exit(0)
 	}()
 }
@@ -343,14 +390,14 @@ func (id *Daemon) stopHandler() bool {
 	pidFile := NewPidFile()
 	pid := pidFile.get()
 	if pid == -1 {
-		log.Println("Not running")
+		log.Println("not running")
 		return false
 	}
 
-	process := NewProcessMetaPid(pid).Process()
+	process := NewProcessInfoPid(pid).Process()
 	if process == nil {
 		pidFile.clear()
-		log.Println("Not running, cleared pid")
+		log.Println("not running")
 		return false
 	}
 
@@ -358,7 +405,7 @@ func (id *Daemon) stopHandler() bool {
 	process.Signal(syscall.SIGTERM)
 	process.Wait()
 
-	log.Println("Stopped", pid)
+	log.Println("stopped", pid)
 	pidFile.clear()
 	return true
 }
@@ -375,19 +422,20 @@ func (id *Daemon) respawnHandler(fork bool) {
 		}
 		pidFile.clear()
 
-		cmd := exec.Command(os.Args[0], "respawn", "nofork")
+		proc := NewProcessInfoCurrent()
+		cmd := exec.Command(proc.FullPath(), "respawn", "nofork")
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		err := cmd.Start()
 		if err != nil {
-			log.Println(err)
+			log.Println("failed to exec", proc.FullPath(), err)
 		}
-		log.Println("Started", cmd.Process.Pid)
+		log.Println("started", cmd.Process.Pid)
 		return
 	}
 
 	// from this point down, daemon code will be executed
 
-	proc := NewProcessMetaCurrent()
+	proc := NewProcessInfoCurrent()
 	pidFile.set(proc.Pid)
 
 	exitCh := make(chan bool, 1)
@@ -422,11 +470,17 @@ func (id *Daemon) respawnHandler(fork bool) {
 			log.Println("Respawn stopped", proc.Pid)
 			return
 		default:
-			log.Println("Respawning", os.Args[0])
-			cmd = exec.Command(os.Args[0], "start", "nofork", "nolock")
+			proc := NewProcessInfoCurrent()
+			log.Println("Respawning", proc.FullPath())
+			_, err := os.Lstat(proc.FullPath())
+			if err != nil {
+				log.Println("Executable not found", proc.FullPath(), err)
+				return
+			}
+			cmd = exec.Command(proc.FullPath(), "start", "nofork", "nolock")
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-			cmd.Run()
-			log.Println("Daemon exited")
+			err = cmd.Run()
+			log.Println("Daemon exited", err)
 		}
 	}
 }

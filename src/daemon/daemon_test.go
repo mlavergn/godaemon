@@ -2,20 +2,34 @@ package daemon
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
 func TestProcessInfoName(t *testing.T) {
-	proc := NewProcessMetaCurrent()
-	actual := proc.Name()
+	proc := NewProcessInfoCurrent()
+
+	actual := proc.FullName
 	expect := "daemon.test"
 	if actual != expect {
 		t.Fatal("Name unexpected result", actual, expect)
 	}
+
+	actual = proc.Name
+	expect = "daemon.test"
+	if actual != expect {
+		t.Fatal("ShortName unexpected result", actual, expect)
+	}
+
+	actual = proc.Path
+	expect = "/daemon.test"
+	if strings.HasSuffix(actual, expect) {
+		t.Fatal("Path unexpected result", actual, expect)
+	}
 }
 
 func TestProcessInfoIsCurrentProcess(t *testing.T) {
-	proc := NewProcessMetaCurrent()
+	proc := NewProcessInfoCurrent()
 	actual := proc.IsCurrent()
 	expect := true
 	if actual != expect {
@@ -24,7 +38,7 @@ func TestProcessInfoIsCurrentProcess(t *testing.T) {
 }
 
 func TestProcessInfoIsDaemon(t *testing.T) {
-	proc := NewProcessMetaCurrent()
+	proc := NewProcessInfoCurrent()
 	actual := proc.IsDaemon()
 	expect := false
 	if actual != expect {
@@ -33,7 +47,7 @@ func TestProcessInfoIsDaemon(t *testing.T) {
 }
 
 func TestProcessInfoProcess(t *testing.T) {
-	proc := NewProcessMetaCurrent()
+	proc := NewProcessInfoCurrent()
 	actual := proc.Process()
 	expect := os.Getpid()
 	if actual.Pid != expect {
@@ -42,7 +56,7 @@ func TestProcessInfoProcess(t *testing.T) {
 }
 
 func TestProcessInfoParent(t *testing.T) {
-	proc := NewProcessMetaCurrent()
+	proc := NewProcessInfoCurrent()
 	actual := proc.Parent()
 	expect := os.Getppid()
 	if actual.Pid != expect {

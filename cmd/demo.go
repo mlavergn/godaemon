@@ -11,14 +11,20 @@ import (
 var log *oslog.Logger
 
 func showProcessInfo() {
-	proc := daemon.NewProcessMetaCurrent()
-	log.Println("Child name:pid:daemonized", proc.Name(), proc.Pid, proc.IsDaemon())
+	proc := daemon.NewProcessInfoCurrent()
+	oslog.Println("FullName", proc.FullName)
+	oslog.Println("Pid:", proc.Pid, proc.IsDaemon())
+	oslog.Println("Name:", proc.Name)
+	oslog.Println("Path:", proc.Path)
+	oslog.Println("IsDaemon:", proc.IsDaemon())
 	parent := proc.Parent()
-	log.Println("Parent name:pid", parent.Name(), parent.Pid)
+	oslog.Println("Parent name:pid", parent.FullName, parent.Pid)
 }
 
 func main() {
 	oslog.Println("Go Daemon Demo")
+
+	showProcessInfo()
 
 	log = daemon.Syslogger("demo")
 	daemon.Config(true, log)

@@ -6,7 +6,7 @@ package daemon
 // #include <stdlib.h>
 import "C"
 
-func processMetaNameImpl(pid int) string {
+func ProcessInfoNameImpl(pid int) string {
 	cname := C.malloc(C.PROC_PIDPATHINFO_MAXSIZE)
 	defer C.free(cname)
 	_, err := C.proc_pidpath(C.int(pid), cname, C.PROC_PIDPATHINFO_MAXSIZE)
