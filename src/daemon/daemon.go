@@ -17,7 +17,7 @@ import (
 // init
 
 // Version export
-const Version = "1.6.0"
+const Version = "1.6.1"
 
 // DEBUG flag
 const DEBUG = false
@@ -265,15 +265,15 @@ func (id *PidFile) set(pid int) bool {
 		return false
 	}
 
-	defer pidFile.Close()
-
 	_, err = pidFile.WriteString(strconv.Itoa(pid))
 	if err != nil {
 		log.Println("Unable to write pid file", id.lockPath, err)
+		pidFile.Close()
 		return false
 	}
 
 	pidFile.Sync()
+	pidFile.Close()
 	return true
 }
 
