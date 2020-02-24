@@ -4,7 +4,7 @@ import (
 	oslog "log"
 	"time"
 
-	"github.com/mlavergn/godaemon/src/daemon"
+	daemon "github.com/mlavergn/godaemon"
 )
 
 // standard logger

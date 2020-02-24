@@ -10,19 +10,19 @@ func TestProcessInfoName(t *testing.T) {
 	proc := NewProcessInfoCurrent()
 
 	actual := proc.FullName
-	expect := "daemon.test"
+	expect := "godaemon.test"
 	if actual != expect {
 		t.Fatal("Name unexpected result", actual, expect)
 	}
 
 	actual = proc.Name
-	expect = "daemon.test"
+	expect = "godaemon.test"
 	if actual != expect {
 		t.Fatal("ShortName unexpected result", actual, expect)
 	}
 
 	actual = proc.Path
-	expect = "/daemon.test"
+	expect = "/godaemon.test"
 	if strings.HasSuffix(actual, expect) {
 		t.Fatal("Path unexpected result", actual, expect)
 	}

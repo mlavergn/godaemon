@@ -17,7 +17,7 @@ import (
 // init
 
 // Version export
-const Version = "1.6.1"
+const Version = "1.7.0"
 
 // DEBUG flag
 const DEBUG = false
@@ -215,7 +215,7 @@ func (id *ProcessInfo) RestartParent(updatePath string) {
 				return
 			}
 		} else {
-			log.Println("Fork no detected, attempting restart wihtout kill", id, parent)
+			log.Println("Fork not detected or parent is init process, respawn without parent kill", id, parent)
 		}
 		dlog.Println("ProcessInfo.RestartParent killed parent, respawning", updatePath)
 		cmd := exec.Command(updatePath, "respawn", "fork")

@@ -8,10 +8,10 @@
 
 .PHONY: test
 
-VERSION := 1.6.1
+VERSION := 1.7.0
 
 ver:
-	@sed -i '' 's/^const Version = "[0-9]\{1,3\}.[0-9]\{1,3\}.[0-9]\{1,3\}"/const Version = "${VERSION}"/' src/daemon/daemon.go
+	@sed -i '' 's/^const Version = "[0-9]\{1,3\}.[0-9]\{1,3\}.[0-9]\{1,3\}"/const Version = "${VERSION}"/' daemon.go
 
 lint:
 	golint .
@@ -26,13 +26,13 @@ clean:
 	rm -f demo
 
 test: build
-	go test -v -count=1 ./src/...
+	go test -v -count=1 ./...
 
 github:
 	open "https://github.com/mlavergn/godaemon"
 
 release:
-	zip -r godaemon.zip LICENSE README.md Makefile cmd src
+	zip -r godaemon.zip LICENSE README.md Makefile cmd *.go go.mod
 	hub release create -m "${VERSION} - GoDaemon" -a godaemon.zip -t master "v${VERSION}"
 	open "https://github.com/mlavergn/godaemon/releases"
 
